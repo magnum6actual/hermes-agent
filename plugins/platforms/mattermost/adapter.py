@@ -564,8 +564,10 @@ class MattermostAdapter(BasePlatformAdapter):
             message_text = self._apply_channel_gating(channel_id, message_text)
             if message_text is None:
                 return
-        # Thread support: replies use root_id; in thread mode a top-level channel post is itself a valid root.
-        thread_id = post.get("root_id") or None
+        # A paired DM is one native conversation even when Mattermost presents an
+        # inbound post as a thread reply.  The raw post still carries root_id for
+        # transport metadata; only channel/group threads affect session identity.
+        thread_id = None if is_dm else (post.get("root_id") or None)
         if not thread_id and self._reply_mode == "thread" and not is_dm and post_id:
             thread_id = post_id
         if message_text[:1].isspace() and message_text.lstrip().startswith("/"):
