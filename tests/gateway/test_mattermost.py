@@ -22,6 +22,42 @@ class TestMattermostProgressThreadRouting:
         ) == "top_post_123"
 
 
+class TestMattermostInboundSessionAffinity:
+    @pytest.mark.asyncio
+    async def test_threaded_dm_keeps_dm_session_while_group_thread_keeps_root(self):
+        adapter = _make_adapter()
+        adapter.config.extra["require_mention"] = "false"
+        adapter._download_attachments = AsyncMock(return_value=([], []))
+        adapter.handle_message = AsyncMock()
+
+        def posted(channel_type, channel_id):
+            return {
+                "event": "posted",
+                "data": {
+                    "channel_type": channel_type,
+                    "sender_name": "wayne",
+                    "post": json.dumps({
+                        "id": f"post-{channel_id}",
+                        "root_id": f"root-{channel_id}",
+                        "channel_id": channel_id,
+                        "user_id": "wayne-id",
+                        "message": "follow-up",
+                    }),
+                },
+            }
+
+        await adapter._handle_ws_event(posted("D", "dm-channel"))
+        dm_event = adapter.handle_message.await_args.args[0]
+        assert dm_event.source.chat_type == "dm"
+        assert dm_event.source.thread_id is None
+        assert dm_event.raw_message["root_id"] == "root-dm-channel"
+
+        await adapter._handle_ws_event(posted("G", "group-channel"))
+        group_event = adapter.handle_message.await_args.args[0]
+        assert group_event.source.chat_type == "group"
+        assert group_event.source.thread_id == "root-group-channel"
+
+
 class TestMattermostDisplayHygiene:
 
     def test_mattermost_platform_opt_in_can_enable_interim_assistant_messages(self):
@@ -708,4 +744,3 @@ class TestMultiplexProfileScope:
             # skipped -- writing here would leak into every other profile's
             # os.environ.
             assert "MATTERMOST_REQUIRE_MENTION" not in os.environ
-
