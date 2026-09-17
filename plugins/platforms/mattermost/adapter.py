@@ -29,6 +29,10 @@ from gateway.platforms._shared import (
     extra_or_secret as _extra_or_secret, get_scoped_secret as _get_scoped_secret,
     send_error
 )
+from gateway.mattermost_voice_projection import (
+    load_projection_config,
+    valid_user_voice_projection,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -122,6 +126,9 @@ class MattermostAdapter(BasePlatformAdapter):
         self._last_post_status: Optional[int] = None  # POST-only, read by the broken-thread-root fallback
         self._last_post_error: str = ""
         self._dedup = MessageDeduplicator()
+        self._voice_projection = load_projection_config(
+            config.extra.get("voice_projection_config")
+        )
 
     # --- HTTP helpers ---
 
@@ -242,6 +249,12 @@ class MattermostAdapter(BasePlatformAdapter):
             await self._session.close()
             return False
         self._bot_user_id, self._bot_username = me["id"], me.get("username", "")
+        if (
+            self._voice_projection is not None
+            and self._bot_user_id != self._voice_projection["bot_id"]
+        ):
+            await self._session.close()
+            raise RuntimeError("Mattermost voice projection bot identity mismatch")
         logger.info(
             "Mattermost: authenticated as @%s (%s) on %s", self._bot_username, self._bot_user_id, self._base_url)
         self._ws_task = asyncio.create_task(self._ws_loop())
@@ -554,8 +567,14 @@ class MattermostAdapter(BasePlatformAdapter):
             post = json.loads(data.get("post") or "")
         except (json.JSONDecodeError, TypeError):
             return
-        # Ignore own messages, system posts and redeliveries.
+        # A Wayne-authored voice projection is a signed display receipt, not a
+        # new native prompt. Tampered/foreign posts continue through ordinary
+        # authorization and admission rather than receiving marker-only trust.
         sender_id, post_id = post.get("user_id", ""), post.get("id", "")
+        if valid_user_voice_projection(post, self._voice_projection):
+            self._dedup.is_duplicate(post_id)
+            return
+        # Ignore own messages, system posts and redeliveries.
         if sender_id == self._bot_user_id or post.get("type") or self._dedup.is_duplicate(post_id):
             return
         channel_id, is_dm = post.get("channel_id", ""), data.get("channel_type", "O") == "D"

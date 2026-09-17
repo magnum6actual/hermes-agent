@@ -1624,6 +1624,8 @@ class GatewayShutdownMixin:
         ctx.started_at = time.monotonic()
         self._running = False
         self._clear_plugin_message_injector()
+        from gateway.voice_submission import stop_for_runner as _stop_voice_submission
+        await _stop_voice_submission(self)
         self._draining = True
         # getattr-guards: shutdown-path test doubles may lack the room worker / systemd watchdog.
         stop_room_worker = getattr(self, "_stop_hosted_room_worker", None)

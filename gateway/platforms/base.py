@@ -4177,6 +4177,9 @@ class BasePlatformAdapter(ABC):
         try:
             await self._run_processing_hook("on_processing_start", event)
             response = await self._message_handler(event)
+            from gateway.voice_submission import capture_final_response as _capture_voice_final
+            if _capture_voice_final(event, response):
+                response = None
             is_ephemeral_response = isinstance(response, EphemeralReply)
             # Unwrap EphemeralReply for downstream text processing; TTL applies after send.
             response, _ephemeral_ttl = self._unwrap_ephemeral(response)
@@ -4243,6 +4246,8 @@ class BasePlatformAdapter(ABC):
                 ProcessingOutcome.CANCELLED if expected else ProcessingOutcome.FAILURE)
             raise
         except BaseException as e:
+            from gateway.voice_submission import fail_response as _fail_voice_response
+            _fail_voice_response(event, e)
             await self._run_processing_hook("on_processing_complete", event, ProcessingOutcome.FAILURE)
             logger.error("[%s] Error handling message: %s", self.name, e, exc_info=True)
             _thread_metadata = (await self._notify_turn_error(event, e)) or _thread_metadata

@@ -1739,6 +1739,14 @@ class GatewayTurnMixin:
             _user_entry["display_kind"] = prepared.persist_user_display_kind
         if prepared.persistence_owner:
             _user_entry["display_metadata"] = {"gateway_input_owner": prepared.persistence_owner}
+        from gateway.voice_submission import CAPTURE_ORIGIN
+        if (event.metadata or {}).get("capture_origin") == CAPTURE_ORIGIN:
+            _user_entry.setdefault("display_metadata", {}).update({
+                "capture_origin": CAPTURE_ORIGIN,
+                "voice_submission_id": str(
+                    (event.metadata or {}).get("voice_submission_id") or ""
+                ),
+            })
         if getattr(event, "message_id", None):
             _user_entry["message_id"] = str(event.message_id)
         return _user_entry
@@ -2095,18 +2103,28 @@ class GatewayTurnMixin:
             # Admission/typing is not execution. All routing, authorization and
             # turn preparation gates have passed when the agent runner is entered.
             event._heartbeat_execution_started = True
-            agent_result = await self._run_agent(
-                message=message_text, context_prompt=prepared.context_prompt, history=history, source=source,
-                session_id=_run_start_session_id, session_key=session_key,
-                run_generation=run_generation, event_message_id=self._reply_anchor_for_event(event),
-                inbound_message_id=str(event.message_id) if event.message_id else None,
-                channel_prompt=event.channel_prompt, moa_config=getattr(event, "_moa_config", None),
-                persist_user_message=prepared.persist_user_message,
-                persist_user_timestamp=prepared.persist_user_timestamp,
-                persist_user_display_kind=prepared.persist_user_display_kind,
-                persist_user_display_metadata={"gateway_input_owner": prepared.persistence_owner},
-                message_type=event.message_type,
-            )
+            from gateway.voice_submission import CAPTURE_ORIGIN, capture_scope
+            _persist_metadata = {"gateway_input_owner": prepared.persistence_owner}
+            if (event.metadata or {}).get("capture_origin") == CAPTURE_ORIGIN:
+                _persist_metadata.update({
+                    "capture_origin": CAPTURE_ORIGIN,
+                    "voice_submission_id": str(
+                        (event.metadata or {}).get("voice_submission_id") or ""
+                    ),
+                })
+            with capture_scope(event):
+                agent_result = await self._run_agent(
+                    message=message_text, context_prompt=prepared.context_prompt, history=history, source=source,
+                    session_id=_run_start_session_id, session_key=session_key,
+                    run_generation=run_generation, event_message_id=self._reply_anchor_for_event(event),
+                    inbound_message_id=str(event.message_id) if event.message_id else None,
+                    channel_prompt=event.channel_prompt, moa_config=getattr(event, "_moa_config", None),
+                    persist_user_message=prepared.persist_user_message,
+                    persist_user_timestamp=prepared.persist_user_timestamp,
+                    persist_user_display_kind=prepared.persist_user_display_kind,
+                    persist_user_display_metadata=_persist_metadata,
+                    message_type=event.message_type,
+                )
             _turn_seconds = time.monotonic() - _turn_started_monotonic
 
             # A queued (/queue) chain answered the LAST message of the chain, so the outer final
@@ -2793,6 +2811,15 @@ class GatewayTurnMixin:
         from gateway.status_phrases import choose_status_phrase, resolve_status_phrase_catalog
         user_config = _load_gateway_config()
         platform_key = _platform_config_key(source.platform)
+        from gateway.voice_submission import current_capture_origin
+        if current_capture_origin():
+            import copy
+            user_config = copy.deepcopy(user_config)
+            display = user_config.setdefault("display", {})
+            platforms = display.setdefault("platforms", {})
+            platform_display = platforms.setdefault(platform_key, {})
+            platform_display["streaming"] = False
+            platform_display["interim_assistant_messages"] = False
         enabled_toolsets, disabled_toolsets = self._resolve_turn_toolsets(user_config, source, platform_key)
         adapter = self._adapter_for_source(source)
         # Tool preview length (0 = no limit) and friendly tool labels (default on), per-platform.

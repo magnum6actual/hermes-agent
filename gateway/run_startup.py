@@ -1441,6 +1441,8 @@ class GatewayStartupMixin:
         self._wire_teams_pipeline_runtime()
         self._running = True
         self._install_plugin_message_injector()
+        from gateway.voice_submission import start_for_runner as _start_voice_submission
+        self._voice_submission_server = await _start_voice_submission(self)
         self._update_runtime_status("running")
         await self._start_finish_wiring(connected_count)
         self._start_spawn_background_watchers()
